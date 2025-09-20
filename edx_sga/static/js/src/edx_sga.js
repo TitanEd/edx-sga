@@ -18,6 +18,7 @@ function StaffGradedAssignmentXBlock(runtime, element) {
     var downloadSubmissionsUrl = runtime.handlerUrl(element, 'download_submissions');
     var prepareDownloadSubmissionsUrl = runtime.handlerUrl(element, 'prepare_download_submissions');
     var downloadSubmissionsStatusUrl = runtime.handlerUrl(element, 'download_submissions_status');
+    var getStudentStateUrl = runtime.handlerUrl(element, 'student_state');
     var template = _.template($(element).find("#sga-tmpl").text());
     var gradingTemplate;
     var preparingSubmissionsMsg = gettext(
@@ -31,7 +32,7 @@ function StaffGradedAssignmentXBlock(runtime, element) {
       state.downloadUrl = downloadUrl;
       state.annotatedUrl = annotatedUrl;
       state.error = state.error || false;
-
+      state.finalized = state.uploaded ? state.uploaded.finalized : false;
       // Render template
       var content = $(element).find('#sga-content').html(template(state));
 
@@ -211,7 +212,8 @@ function StaffGradedAssignmentXBlock(runtime, element) {
           2: { sorter: "alphanum" },
           3: { sorter: "alphanum" },
           4: { sorter: "yesno" },
-          7: { sorter: "alphanum" }
+          7: { sorter: "alphanum" },
+          8: { sorter: "yesno" }
         }
       });
       $("#submissions").trigger("update");
@@ -238,6 +240,7 @@ function StaffGradedAssignmentXBlock(runtime, element) {
       form.find('#submission_id-input').val(row.data('submission_id'));
       form.find('#grade-input').val(row.data('score'));
       form.find('#comment-input').text(row.data('comment'));
+      form.find('#allow-resubmission-input').prop('checked', row.data('allow_resubmission'));
       form.find('#remove-grade').prop('disabled', false);
       form.find('.ccx-enter-grade-spinner').hide();
       form.off('submit').on('submit', function (event) {
@@ -253,10 +256,21 @@ function StaffGradedAssignmentXBlock(runtime, element) {
         } else if (score > max_score) {
           gradeFormError('<br/>' + interpolate(gettext('Maximum score is %(max_score)s'), { max_score: max_score }, true));
         } else {
-          // No errors
           form.find('.ccx-enter-grade-spinner').show();
-          $.post(enterGradeUrl, form.serialize())
-            .success(renderStaffGrading)
+          var formData = form.serializeArray();
+          formData = formData.filter(function(item) { return item.name !== 'allow_resubmission'; });
+          formData.push({
+            name: 'allow_resubmission',
+            value: form.find('#allow-resubmission-input').is(':checked').toString()
+          });
+          $.post(enterGradeUrl, formData)
+            .success(function (data) {
+              renderStaffGrading(data);
+              // Poll student state to refresh UI
+              if (isStaff()) {
+                $.get(getStudentStateUrl).success(render);
+              }
+            })
             .fail(function () {
               form.find('.ccx-enter-grade-spinner').hide();
             });
@@ -270,8 +284,13 @@ function StaffGradedAssignmentXBlock(runtime, element) {
           row.data('student_id');
         event.preventDefault();
         if (row.data('score')) {
-          // if there is no grade then it is pointless to call api.
-          $.get(url).success(renderStaffGrading).fail(function () {
+          $.get(url).success(function (data) {
+            renderStaffGrading(data);
+            // Poll student state to refresh UI
+            if (isStaff()) {
+              $.get(getStudentStateUrl).success(render);
+            }
+          }).fail(function () {
             $(this).prop('disabled', false);
             form.find('.ccx-enter-grade-spinner').hide();
           });
@@ -297,7 +316,7 @@ function StaffGradedAssignmentXBlock(runtime, element) {
         setTimeout(function () {
           $('#grade-submissions-button').click();
           gradeFormError('');
-          gradePopUpIsOpen = false
+          gradePopUpIsOpen = false;
         }, 225);
       });
       gradePopUpIsOpen = true;
@@ -334,7 +353,7 @@ function StaffGradedAssignmentXBlock(runtime, element) {
         block.find('#grade-submissions-button')
           .leanModal()
           .on('click', function () {
-            updateIframe()
+            updateIframe();
             $.ajax({
               url: getStaffGradingUrl,
               success: renderStaffGrading
@@ -383,28 +402,28 @@ function StaffGradedAssignmentXBlock(runtime, element) {
       }
       $("#lean_overlay").on("click", function (_) {
         if (currentIFrameHeight && !gradePopUpIsOpen) {
-          sendResizeMessage(currentIFrameHeight)
-          currentIFrameHeight = null
+          sendResizeMessage(currentIFrameHeight);
+          currentIFrameHeight = null;
         }
       })
     });
 
     function updateIframe() {
-      if (isInIframe && !currentIFrameHeight) {
-        currentIFrameHeight = $("body").height()
+      if (isInIframe() && !currentIFrameHeight) {
+        currentIFrameHeight = $("body").height();
         addMaxHeightInIframe()
         if (currentIFrameHeight < 600) {
-          sendResizeMessage(600)
+          sendResizeMessage(600);
         }
       }
     }
 
     function isInIframe() {
-      return window.parent !== window
+      return window.parent !== window;
     }
 
     function addMaxHeightInIframe() {
-      $(".grade-submission").css("max-height", "600px")
+      $(".grade-submission").css("max-height", "600px");
     }
 
 
