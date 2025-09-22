@@ -37,6 +37,7 @@ from web_fragments.fragment import Fragment
 from xblock.utils.studio_editable import StudioEditableXBlockMixin
 from xmodule.contentstore.content import StaticContent
 from xmodule.util.duedate import get_extended_due_date
+from edx_toggles.toggles import WaffleSwitch  # Added for Waffle switch
 
 from edx_sga.constants import ATTR_KEY_ANONYMOUS_USER_ID, ATTR_KEY_USER_IS_STAFF, ATTR_KEY_USER_ROLE, ITEM_TYPE
 from edx_sga.showanswer import ShowAnswerXBlockMixin
@@ -55,6 +56,8 @@ log = logging.getLogger(__name__)
 
 default_storage = get_default_storage()
 
+# Define the Waffle switch
+REQUIRE_APPROVAL_SWITCH = WaffleSwitch("edx_sga.require_approval", __name__)
 
 def reify(meth):
     """
@@ -449,7 +452,8 @@ class StaffGradedAssignmentXBlock(
                 )
             )
 
-        if self.is_instructor():
+        # Check if the user can set the score directly (instructor or staff with switch enabled)
+        if self.is_instructor() or (self.is_course_staff() and REQUIRE_APPROVAL_SWITCH.is_enabled()):
             uuid = request.params["submission_id"]
             submissions_api.set_score(uuid, score, self.max_score())
             # Reset finalized if allowing resubmission
@@ -457,6 +461,8 @@ class StaffGradedAssignmentXBlock(
                 submission = Submission.objects.get(uuid=uuid)
                 submission.answer["finalized"] = False
                 submission.save()
+            # Clear staff_score since it's not needed when score is directly set
+            state["staff_score"] = None
         else:
             state["staff_score"] = score
         state["comment"] = request.params.get("comment", "")
@@ -843,7 +849,7 @@ class StaffGradedAssignmentXBlock(
                 approved = score is not None
                 if score is None:
                     score = state.get("staff_score")
-                    needs_approval = score is not None
+                    needs_approval = score is not None and not REQUIRE_APPROVAL_SWITCH.is_enabled()
                 else:
                     needs_approval = False
                 instructor = self.is_instructor()
@@ -860,7 +866,7 @@ class StaffGradedAssignmentXBlock(
                     "score": score,
                     "approved": approved,
                     "needs_approval": instructor and needs_approval,
-                    "may_grade": instructor or not approved,
+                    "may_grade": instructor or not approved or REQUIRE_APPROVAL_SWITCH.is_enabled(),
                     "annotated": force_str(state.get("annotated_filename", "")),
                     "comment": force_str(state.get("comment", "")),
                     "finalized": is_finalized_submission(submission_data=submission),
