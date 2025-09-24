@@ -60,9 +60,8 @@ def get_file_modified_time_utc(file_path):
     file_timezone = (
         # time.tzname returns a 2 element tuple:
         #   (local non-DST timezone, e.g.: 'EST', local DST timezone, e.g.: 'EDT')
-        pytz.timezone(time.tzname[0])
-        if settings.DEFAULT_FILE_STORAGE
-        == "django.core.files.storage.FileSystemStorage"
+        pytz.timezone(settings.TIME_ZONE)
+        if settings.DEFAULT_FILE_STORAGE == "django.core.files.storage.FileSystemStorage"
         else pytz.utc
     )
 
