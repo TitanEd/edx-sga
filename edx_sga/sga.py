@@ -32,11 +32,12 @@ from submissions.models import Submission
 from webob.response import Response
 from xblock.core import XBlock
 from xblock.exceptions import JsonHandlerError
-from xblock.fields import DateTime, Float, Integer, Scope, String
+from xblock.fields import Boolean, DateTime, Float, Integer, Scope, String
 from web_fragments.fragment import Fragment
 from xblock.utils.studio_editable import StudioEditableXBlockMixin
 from xmodule.contentstore.content import StaticContent
 from xmodule.util.duedate import get_extended_due_date
+from edx_toggles.toggles import WaffleSwitch  # Added for Waffle switch
 
 from edx_sga.constants import ATTR_KEY_ANONYMOUS_USER_ID, ATTR_KEY_USER_IS_STAFF, ATTR_KEY_USER_ROLE, ITEM_TYPE
 from edx_sga.showanswer import ShowAnswerXBlockMixin
@@ -55,6 +56,8 @@ log = logging.getLogger(__name__)
 
 default_storage = get_default_storage()
 
+# Define the Waffle switch
+REQUIRE_APPROVAL_SWITCH = WaffleSwitch("edx_sga.require_approval", __name__)
 
 def reify(meth):
     """
@@ -91,7 +94,7 @@ class StaffGradedAssignmentXBlock(
 
     display_name = String(
         display_name=_("Display Name"),
-        default=_("Staff Graded Assignment"),
+        default=_("File Submission Assessment"),
         scope=Scope.settings,
         help=_(
             "This name appears in the horizontal navigation at the top of the page."
@@ -111,7 +114,7 @@ class StaffGradedAssignmentXBlock(
 
     points = Integer(
         display_name=_("Maximum score"),
-        help=_("Maximum grade score given to assignment by staff."),
+        help=_("Maximum grade score given to assignment by instructor."),
         default=100,
         scope=Scope.settings,
     )
@@ -163,6 +166,13 @@ class StaffGradedAssignmentXBlock(
         help=_("When the annotated file was uploaded"),
     )
 
+    allow_resubmission = Boolean(
+        display_name=_("Allow Resubmission"),
+        default=False,
+        scope=Scope.user_state,
+        help=_("Indicates whether the student is allowed to resubmit their assignment.")
+    )
+
     @classmethod
     def student_upload_max_size(cls):
         """
@@ -182,7 +192,7 @@ class StaffGradedAssignmentXBlock(
 
     @classmethod
     def parse_xml(cls, node, runtime, keys):
-        # pylint: disable=arguments-differ,unused-argument
+        # pylint: disable=unused-argument
         """
         Override default serialization to handle <solution /> elements
         """
@@ -308,6 +318,13 @@ class StaffGradedAssignmentXBlock(
             submission.answer["finalized"] = True
             submission.submitted_at = django_now()
             submission.save()
+            user = self.get_real_user()
+            if user:
+                student_module = self.get_or_create_student_module(user)
+                state = json.loads(student_module.state)
+                state["allow_resubmission"] = False
+                student_module.state = json.dumps(state)
+                student_module.save()
         return Response(json_body=self.student_state())
 
     @XBlock.handler
@@ -417,6 +434,7 @@ class StaffGradedAssignmentXBlock(
         require(self.is_course_staff())
         score = request.params.get("grade", None)
         module = self.get_student_module(request.params["module_id"])
+        allow_resubmission = request.params.get("allow_resubmission", "false").lower() == "true"
         if not score:
             return Response(
                 json_body=self.validate_score_message(
@@ -434,19 +452,29 @@ class StaffGradedAssignmentXBlock(
                 )
             )
 
-        if self.is_instructor():
+        # Check if the user can set the score directly (instructor or staff with switch enabled)
+        if self.is_instructor() or (self.is_course_staff() and REQUIRE_APPROVAL_SWITCH.is_enabled()):
             uuid = request.params["submission_id"]
             submissions_api.set_score(uuid, score, self.max_score())
+            # Reset finalized if allowing resubmission
+            if allow_resubmission:
+                submission = Submission.objects.get(uuid=uuid)
+                submission.answer["finalized"] = False
+                submission.save()
+            # Clear staff_score since it's not needed when score is directly set
+            state["staff_score"] = None
         else:
             state["staff_score"] = score
         state["comment"] = request.params.get("comment", "")
+        state["allow_resubmission"] = allow_resubmission
         module.state = json.dumps(state)
         module.save()
         log.info(
-            "enter_grade for course:%s module:%s student:%s",
+            "enter_grade for course:%s module:%s student:%s allow_resubmission:%s",
             module.course_id,
             module.module_state_key,
             module.student.username,
+            allow_resubmission,
         )
 
         return Response(json_body=self.staff_grading_data())
@@ -468,6 +496,7 @@ class StaffGradedAssignmentXBlock(
         state["annotated_filename"] = None
         state["annotated_mimetype"] = None
         state["annotated_timestamp"] = None
+        state["allow_resubmission"] = False
         module.state = json.dumps(state)
         module.save()
         log.info(
@@ -644,8 +673,10 @@ class StaffGradedAssignmentXBlock(
     def block_course_id(self):
         """
         Return the course_id of the block.
+
+        Note: if this block is used in a Content Library, the returned ID will be the library's ID.
         """
-        return str(self.course_id)
+        return str(self.context_key)
 
     def get_student_item_dict(self, student_id=None):
         """
@@ -698,13 +729,18 @@ class StaffGradedAssignmentXBlock(
         """
         Add context info for the Staff Debug interface.
         """
-        published = self.start
+        published = getattr(self, 'start', None)
         context["is_released"] = published and published < utcnow()
         context["location"] = self.location
         context["category"] = type(self).__name__
-        context["fields"] = [
-            (name, field.read_from(self)) for name, field in self.fields.items()
-        ]
+        context["fields"] = []
+
+        for name, field in self.fields.items():
+            try:
+                context["fields"].append((name, field.read_from(self)))
+            # Library blocks only support the content and settings scopes
+            except NotImplementedError:
+                pass
 
     def get_student_module(self, module_id):
         """
@@ -750,7 +786,10 @@ class StaffGradedAssignmentXBlock(
         """
         submission = self.get_submission()
         if submission:
-            uploaded = {"filename": submission["answer"]["filename"]}
+            uploaded = {
+                "filename": submission["answer"]["filename"],
+                "finalized": submission["answer"].get("finalized", False)
+            }
         else:
             uploaded = None
 
@@ -776,6 +815,7 @@ class StaffGradedAssignmentXBlock(
             "graded": graded,
             "max_score": self.max_score(),
             "upload_allowed": self.upload_allowed(submission_data=submission),
+            "allow_resubmission": self.allow_resubmission,
             "solution": solution,
             "base_asset_url": StaticContent.get_base_url_path_for_course_assets(
                 self.location.course_key
@@ -809,7 +849,7 @@ class StaffGradedAssignmentXBlock(
                 approved = score is not None
                 if score is None:
                     score = state.get("staff_score")
-                    needs_approval = score is not None
+                    needs_approval = score is not None and not REQUIRE_APPROVAL_SWITCH.is_enabled()
                 else:
                     needs_approval = False
                 instructor = self.is_instructor()
@@ -826,10 +866,11 @@ class StaffGradedAssignmentXBlock(
                     "score": score,
                     "approved": approved,
                     "needs_approval": instructor and needs_approval,
-                    "may_grade": instructor or not approved,
+                    "may_grade": instructor or not approved or REQUIRE_APPROVAL_SWITCH.is_enabled(),
                     "annotated": force_str(state.get("annotated_filename", "")),
                     "comment": force_str(state.get("comment", "")),
                     "finalized": is_finalized_submission(submission_data=submission),
+                    "allow_resubmission": state.get("allow_resubmission", False),
                 }
 
         return {
@@ -952,7 +993,7 @@ class StaffGradedAssignmentXBlock(
         )
         return (
             not self.past_due()
-            and self.score is None
+            and (self.score is None or self.allow_resubmission)
             and not is_finalized_submission(submission_data)
         )
 

@@ -13,12 +13,19 @@
       <p class="upload">
         <label>
           <% if (uploaded) { %>
-            {% trans "Upload a different file" %}
+            <% if (allow_resubmission) { %>
+              {% trans "Resubmit your assignment" %}
+            <% } else { %>
+              {% trans "Upload a different file" %}
+            <% } %>
           <% } else { %>
             {% trans "Upload your assignment" %}
           <% } %>
           <input class="fileupload" type="file" name="assignment" />
         </label>
+      </p>
+      <p>
+        <a class="button finalize-upload">{% trans "Submit" %}</a>
       </p>
     <% } %>
     <% if (uploaded) { %>
@@ -37,15 +44,17 @@
               <b>{% trans "Annotated file from instructor" %}</b>
               <a href="<%= annotatedUrl %>"><%= annotated.filename %></a><br/>
             <% } %>
-          <% } else if (uploaded) { %>
-            {% trans "This assignment has not yet been graded." %}
+            <% if (allow_resubmission) { %>
+              <b>{% trans "Resubmission" %}</b> {% trans "You may resubmit this assignment." %}<br/>
+            <% } %>
+          <% } else { %>
+            <% if (finalized) { %>
+              {% trans "This assignment has been submitted but not yet graded." %}
+            <% } else { %>
+              {% trans "Please submit your assignment to receive a grade." %}
+            <% } %>
           <% } %>
         </p>
-        <% if (upload_allowed) { %>
-          <p>
-            <a class="button finalize-upload">Submit</a>
-          </p>
-        <% } %>
       </div>
     <% } %>
     <% if (solution) { %>
@@ -74,6 +83,7 @@
         <th class="header">{% trans "Grade" %} <i class="icon fa fa-sort"/></th>
         <th class="header">{% trans "Instructor's comments" %} <i class="icon fa fa-sort"/></th>
         <th class="header">{% trans "Annotated" %} <i class="icon fa fa-sort"/></th>
+        <th class="header">{% trans "Allow Resubmission" %} <i class="icon fa fa-sort"/></th>
         <th class="header" colspan="2">{% trans "Actions" %}</th>
       </tr>
       </thead>
@@ -116,6 +126,13 @@
             <% } %>
           </td>
           <td>
+            <% if (assignment.allow_resubmission) { %>
+              {% trans "Yes" %}
+            <% } else { %>
+              {% trans "No" %}
+            <% } %>
+          </td>
+          <td>
             <% if (assignment.may_grade) { %>
               <a class="enter-grade-button button" href="#enter-grade-{{ id }}">
                 <% if (assignment.needs_approval) { %>
@@ -146,7 +163,7 @@
 
   <section aria-hidden="true" class="modal staff-modal grade-submission" id="grade-{{ id }}" style="height: 75%" tabindex="-1">
     <div class="inner-wrapper" style="color: black; overflow: auto;">
-      <header><h2><span class="display_name">{{ display_name }}</span> - {% trans "Staff Graded Assignment" %}</h2></header>
+      <header><h2><span class="display_name">{{ display_name }}</span>  {% trans "" %}</h2></header>
       <br/>
       <div>
         <a class="instructor-info-action button btn-download-all" href="#" id="download-init-button">{% trans "Download All Submissions" %}</a>
@@ -197,6 +214,12 @@
           <div>{% trans "Grade:" %} <input id="grade-input" name="grade"/>
             <span class="error"></span></div>
           <div>{% trans "Comment:" %} <textarea id="comment-input" name="comment" rows="4"></textarea></div>
+          <div>
+            <label>
+              <input type="checkbox" id="allow-resubmission-input" name="allow_resubmission"/>
+              {% trans "Allow Resubmission" %}
+            </label>
+          </div>
           <div>
             <button type="submit">{% trans "Submit" %}</button>
             <button type="button" id="enter-grade-cancel">
