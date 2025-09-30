@@ -177,3 +177,7 @@
 .sga-block .grade-modal #enter-grade-form{
     padding: 0 !important;
 }
+.sga-block .grade-modal #enter-grade-form #grade-input{
+    border: 1px solid black;
+    border-radius: 2px;
+}
