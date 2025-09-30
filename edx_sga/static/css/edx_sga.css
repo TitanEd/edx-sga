@@ -4,6 +4,18 @@
     max-height: 600px;
 }
 
+.course-wrapper .course-content .staff-modal{
+    position: fixed;
+    opacity: 1;
+    z-index: 11000;
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%);
+    background-color: #fff;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    margin: 0 !important;
+}
+
 .sga-block .staff-modal {
     position: fixed;
     z-index:100;
@@ -131,4 +143,37 @@
 
 .staff-modal .preparing-msg {
   color: red;
+}
+
+/* Added by TitanEd Teams for responsive design */
+.sga-block .staff-modal .inner-wrapper header,
+.sga-block .grade-modal .inner-wrapper header{
+    padding: 0 !important;
+    margin: 0 !important;
+}
+.sga-block .staff-modal .inner-wrapper header h2,
+.sga-block .grade-modal .inner-wrapper header h2,
+.course-wrapper .course-content .staff-modal header h2{
+    font-size: 1.375rem !important;
+    padding: 0 !important;
+    margin: 0 !important    ;
+}
+
+.sga-block .grade-modal{
+    height: auto;
+    width: 50%;
+    position: fixed;
+    opacity: 1;
+    z-index: 11000;
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%);
+    background-color: #fff;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    margin: 0 !important;
+    border: 1px solid #0000005c !important;
+}
+
+.sga-block .grade-modal #enter-grade-form{
+    padding: 0 !important;
 }
