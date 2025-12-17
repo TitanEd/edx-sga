@@ -1,0 +1,22 @@
+A student's assignment has been graded.
+
+Course Name: {{ course_name }}
+Username: {{ student_username }}
+Email: {{ student_email }}
+Assignment Title: "{{ assignment_title }}"
+
+Grade: {{ score }}/{{ max_score }}
+{% if comment != "No comment provided." %}
+Teacher Feedback:
+{{ comment }}
+{% else %}
+No comment provided.
+{% endif %}
+
+Graded by: {{ graded_by }}
+Graded on: {{ date }}
+
+You can view the submission in the course.
+
+Best regards,
+The {{ platform_name }} Team
