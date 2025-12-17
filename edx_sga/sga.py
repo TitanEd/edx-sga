@@ -51,7 +51,11 @@ from edx_sga.utils import (
     is_finalized_submission,
     utcnow,
 )
-
+from django.core.mail import send_mail
+from django.utils import timezone
+from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
+from django.template.loader import render_to_string
+from common.djangoapps.student.models import CourseAccessRole
 log = logging.getLogger(__name__)
 
 default_storage = get_default_storage()
@@ -435,6 +439,7 @@ class StaffGradedAssignmentXBlock(
         score = request.params.get("grade", None)
         module = self.get_student_module(request.params["module_id"])
         allow_resubmission = request.params.get("allow_resubmission", "false").lower() == "true"
+
         if not score:
             return Response(
                 json_body=self.validate_score_message(
@@ -452,23 +457,29 @@ class StaffGradedAssignmentXBlock(
                 )
             )
 
-        # Check if the user can set the score directly (instructor or staff with switch enabled)
+        # Save the score (instructor or staff with approval switch)
         if self.is_instructor() or (self.is_course_staff() and REQUIRE_APPROVAL_SWITCH.is_enabled()):
             uuid = request.params["submission_id"]
             submissions_api.set_score(uuid, score, self.max_score())
-            # Reset finalized if allowing resubmission
             if allow_resubmission:
                 submission = Submission.objects.get(uuid=uuid)
                 submission.answer["finalized"] = False
                 submission.save()
-            # Clear staff_score since it's not needed when score is directly set
             state["staff_score"] = None
         else:
             state["staff_score"] = score
+
+        # Save comment and resubmission flag
         state["comment"] = request.params.get("comment", "")
         state["allow_resubmission"] = allow_resubmission
         module.state = json.dumps(state)
         module.save()
+
+        # - Resubmission is NOT allowed
+        if not allow_resubmission and score is not None:
+            if self.is_instructor():
+                self.send_grade_email(module.student, score, state["comment"])
+
         log.info(
             "enter_grade for course:%s module:%s student:%s allow_resubmission:%s",
             module.course_id,
@@ -476,7 +487,6 @@ class StaffGradedAssignmentXBlock(
             module.student.username,
             allow_resubmission,
         )
-
         return Response(json_body=self.staff_grading_data())
 
     @XBlock.handler
@@ -506,6 +516,69 @@ class StaffGradedAssignmentXBlock(
             module.student.username,
         )
         return Response(json_body=self.staff_grading_data())
+
+    def send_grade_email(self, student, score, comment):
+        """
+        Send SEPARATE notification email to EACH instructor individually.
+        Each instructor sees only their own email.
+        """
+        grader = self.get_real_user()
+        grader_name = grader.profile.name or grader.username if grader else "An instructor"
+
+        context = {
+            'student_full_name': student.profile.name or student.username,
+            'student_username': student.username,
+            'student_email': student.email,
+            'assignment_title': self.display_name,
+            'score': score,
+            'max_score': self.max_score(),
+            'comment': comment.strip() if comment else "No comment provided.",
+            'date': timezone.now().strftime("%B %d, %Y"),
+            'graded_by': grader_name,
+            'platform_name': getattr(settings, "PLATFORM_NAME", "Your Platform"),
+            'course_name': CourseOverview.get_from_id(self.block_course_id).display_name,
+        }
+
+        subject = _("[{platform}] Grade submitted: {student} - {title}").format(
+            platform=context['platform_name'],
+            student=context['student_full_name'],
+            title=self.display_name
+        )
+
+        try:
+            message = render_to_string(
+                'staff_graded_assignment/grade_notification_email.txt',
+                context
+            )
+
+            # Get all instructors
+            instructors = CourseAccessRole.objects.filter(
+                course_id=self.block_course_id,
+                role='instructor'
+            ).values_list('user__email', flat=True).distinct()
+
+            valid_emails = [email for email in instructors if email]
+
+            if not valid_emails:
+                log.warning(f"No instructors found for course {self.block_course_id}")
+                return
+
+            # Send ONE separate email to EACH instructor
+            for instructor_email in valid_emails:
+                send_mail(
+                    subject=subject,
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[instructor_email],
+                    fail_silently=False,
+                )
+
+            log.info(
+                f"Sent {len(valid_emails)} separate grade notifications "
+                f"for student {student.username} (graded by {grader_name})"
+            )
+        except Exception as e:
+            log.error(f"Failed to send instructor notifications: {str(e)}")
 
     @XBlock.handler
     def prepare_download_submissions(
